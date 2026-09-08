@@ -1,7 +1,6 @@
 # envx
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/angelospanag/envx.svg)](https://pkg.go.dev/github.com/angelospanag/envx)
-[![Go Report Card](https://goreportcard.com/badge/github.com/angelospanag/envx)](https://goreportcard.com/report/github.com/angelospanag/envx)
 
 Layered environment configuration for Go, with typed parsing, secret redaction
 and error messages that name the variable you actually have to fix.
