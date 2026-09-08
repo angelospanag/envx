@@ -1,0 +1,8 @@
+# Binaries
+*.test
+*.out
+
+# Local env files
+.env
+.env.*
+!.env.example

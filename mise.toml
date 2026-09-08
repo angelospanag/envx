@@ -1,0 +1,53 @@
+[tools]
+go = "1.27.1"
+golangci-lint = "2.13.2"
+"go:golang.org/x/vuln/cmd/govulncheck" = "latest"
+
+[tasks.build]
+description = "Compile the package"
+run = "go build ./..."
+
+[tasks.test]
+description = "Run Go tests with race detector"
+run = "go test ./... -race -count=1"
+
+[tasks."test:watch"]
+description = "Run Go tests verbosely"
+run = "go test ./... -race -count=1 -v"
+
+[tasks."test:cover"]
+description = "Run Go tests and open an HTML coverage report"
+run = "go test ./... -race -count=1 -coverprofile=coverage.out && go tool cover -html=coverage.out"
+
+[tasks.lint]
+description = "Run golangci-lint"
+run = "golangci-lint run ./..."
+
+[tasks.fuzz]
+description = "Fuzz the parsers for 60s each"
+run = """
+go test -run '^$' -fuzz '^FuzzParseDotEnv$' -fuzztime=60s .
+go test -run '^$' -fuzz '^FuzzParseFieldTag$' -fuzztime=60s .
+go test -run '^$' -fuzz '^FuzzLoadRoundTrip$' -fuzztime=60s .
+"""
+
+[tasks.fmt]
+description = "Format Go code with golangci-lint formatters"
+run = "golangci-lint fmt ./..."
+
+[tasks.vuln]
+description = "Check for known vulnerabilities in dependencies"
+run = "govulncheck ./..."
+
+[tasks.check]
+description = "Format, lint, test and audit — run before pushing"
+run = [
+  "mise run fmt",
+  "mise run lint",
+  "mise run test",
+  "mise run vuln",
+]
+
+[tasks.clean]
+description = "Remove test and coverage artifacts"
+run = "rm -f coverage.out"
