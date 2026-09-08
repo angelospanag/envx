@@ -19,6 +19,13 @@ import (
 // against earlier keys in the same file only — never other layers or the
 // process environment. Write \$ or single-quote to disable.
 func parseDotEnv(data string) (map[string]string, error) {
+	// Editors on Windows write a BOM, and it is invisible, so the first key
+	// would otherwise fail to parse for no reason the author can see.
+	data = strings.TrimPrefix(data, "\ufeff")
+	if strings.HasPrefix(data, "\xff\xfe") || strings.HasPrefix(data, "\xfe\xff") {
+		return nil, fmt.Errorf("file appears to be UTF-16; save it as UTF-8")
+	}
+
 	out := map[string]string{}
 	lines := strings.Split(strings.ReplaceAll(data, "\r\n", "\n"), "\n")
 
@@ -45,9 +52,16 @@ func parseDotEnv(data string) (map[string]string, error) {
 		switch {
 		case strings.HasPrefix(trimmed, `'`), strings.HasPrefix(trimmed, `"`):
 			quote := trimmed[0]
-			body, end, err := readQuoted(lines, i, trimmed[1:], quote)
+			body, end, after, err := readQuoted(lines, i, trimmed[1:], quote)
 			if err != nil {
 				return nil, fmt.Errorf("line %d: %w", i+1, err)
+			}
+			// Only a comment may follow the closing quote. Dropping anything
+			// else would silently truncate the value: A="x"y is not "x".
+			if tail := strings.TrimLeft(after, " \t"); tail != "" && tail[0] != '#' {
+				return nil, fmt.Errorf(
+					"line %d: unexpected %q after the closing quote", end+1, tail,
+				)
 			}
 			i = end
 			if quote == '"' {
@@ -67,8 +81,14 @@ func parseDotEnv(data string) (map[string]string, error) {
 }
 
 // readQuoted consumes a possibly multi-line quoted value, returning the body
-// with escapes intact and the index of the last line consumed.
-func readQuoted(lines []string, idx int, first string, quote byte) (string, int, error) {
+// with escapes intact, the index of the last line consumed, and whatever
+// followed the closing quote on that line.
+func readQuoted(
+	lines []string,
+	idx int,
+	first string,
+	quote byte,
+) (body string, end int, rest string, err error) {
 	var b strings.Builder
 	cur := first
 	for {
@@ -83,7 +103,7 @@ func readQuoted(lines []string, idx int, first string, quote byte) (string, int,
 			case quote == '"' && c == '\\':
 				escaped = true
 			case c == quote:
-				return b.String(), idx, nil
+				return b.String(), idx, cur[j+1:], nil
 			default:
 				b.WriteByte(c)
 			}
@@ -93,7 +113,7 @@ func readQuoted(lines []string, idx int, first string, quote byte) (string, int,
 		}
 		idx++
 		if idx >= len(lines) {
-			return "", idx, fmt.Errorf("unterminated %c-quoted value", quote)
+			return "", idx, "", fmt.Errorf("unterminated %c-quoted value", quote)
 		}
 		b.WriteByte('\n')
 		cur = lines[idx]

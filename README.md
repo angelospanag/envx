@@ -161,6 +161,10 @@ Expansion resolves against keys defined **earlier in the same file** only. It
 never reaches into other layers or the process environment, so a `.env` file
 always reads the same way on its own.
 
+A leading UTF-8 byte order mark is stripped, since Windows editors add one and
+it is invisible. Only a comment may follow a closing quote — `KEY="x"y` is an
+error rather than a silently truncated `x`.
+
 ## Struct tags
 
 ```go
