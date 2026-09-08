@@ -92,7 +92,8 @@ func nextTagOption(s string) (part, rest string) {
 
 func unquoteTagValue(v string) (string, error) {
 	if !strings.HasPrefix(v, "'") {
-		return v, nil
+		// Trim, so `default= 8080` parses. Quote to keep whitespace.
+		return strings.TrimSpace(v), nil
 	}
 	if len(v) < 2 || !strings.HasSuffix(v, "'") {
 		return "", fmt.Errorf("%w: unbalanced quote in %q", ErrInvalidTag, v)
@@ -154,6 +155,16 @@ func (d *decoder) walk(rv reflect.Value, prefix, path string) {
 		}
 		if err != nil {
 			d.fail(fieldPath, prefix+opts.name, "", "", err)
+			continue
+		}
+
+		// envPrefix only means something on a nested struct. Left on a leaf it
+		// would silently read the unprefixed variable instead.
+		if p, ok := sf.Tag.Lookup("envPrefix"); ok {
+			d.fail(fieldPath, "", "", "", fmt.Errorf(
+				"%w: envPrefix:%q on a non-struct field; did you mean env:%q?",
+				ErrInvalidTag, p, p+opts.name,
+			))
 			continue
 		}
 		d.leaf(fv, prefix+opts.name, fieldPath, opts, isSecretType(sf.Type))

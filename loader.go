@@ -46,7 +46,9 @@ func New(sources ...Source) (*Loader, error) {
 	for _, s := range flat {
 		vals, err := s.Values()
 		if err != nil {
-			return nil, err
+			// Name the layer: a bare error from a custom Source says nothing
+			// about which of them failed.
+			return nil, fmt.Errorf("envx: %s: %w", s.Name(), err)
 		}
 		origin := Origin(s.Name())
 		l.layers = append(l.layers, origin)

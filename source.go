@@ -99,13 +99,9 @@ func (s dotEnvSource) Values() (map[string]string, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("envx: reading %s: %w", s.path, err)
+		return nil, err
 	}
-	vals, err := parseDotEnv(string(data))
-	if err != nil {
-		return nil, fmt.Errorf("envx: parsing %s: %w", s.path, err)
-	}
-	return vals, nil
+	return parseDotEnv(string(data))
 }
 
 // sourceList is a flat group of sources that New expands in place.
@@ -155,7 +151,7 @@ func (s secretsDirSource) Values() (map[string]string, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("envx: reading secrets dir %s: %w", s.dir, err)
+		return nil, err
 	}
 	out := map[string]string{}
 	for _, e := range entries {
@@ -173,7 +169,7 @@ func (s secretsDirSource) Values() (map[string]string, error) {
 		}
 		data, err := os.ReadFile(p)
 		if err != nil {
-			return nil, fmt.Errorf("envx: reading secret %s: %w", p, err)
+			return nil, fmt.Errorf("reading %s: %w", e.Name(), err)
 		}
 		out[e.Name()] = strings.TrimSuffix(string(data), "\n")
 	}
