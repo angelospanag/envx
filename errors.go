@@ -12,12 +12,10 @@ var (
 	ErrMissing = errors.New("required but not set")
 	// ErrEmpty is the cause when a notEmpty key was supplied as the empty string.
 	ErrEmpty = errors.New("must not be empty")
-	// ErrUnsupportedType is the cause when a struct field's type cannot be
-	// decoded from a string.
+	// ErrUnsupportedType is the cause when a field's type cannot be decoded.
 	ErrUnsupportedType = errors.New("unsupported field type")
-	// ErrInvalidTag is the cause when an `env` struct tag cannot be parsed.
-	// Unlike the others this reports a mistake in the code, not in the
-	// environment.
+	// ErrInvalidTag is the cause when an `env` tag cannot be parsed. Unlike the
+	// others it reports a mistake in the code, not in the environment.
 	ErrInvalidTag = errors.New("invalid env tag")
 )
 
@@ -25,14 +23,11 @@ var (
 type FieldError struct {
 	// Field is the Go path to the field, such as "APIConfig.DB.Port".
 	Field string
-	// Key is the environment variable name, such as "DB_PORT". This is the
-	// part users can act on, so it leads the message.
+	// Key is the environment variable name, such as "DB_PORT".
 	Key string
-	// Value is the raw value that failed, redacted when the field is a Secret.
-	// Empty when nothing was supplied.
+	// Value is the raw value that failed, redacted for a Secret field.
 	Value string
-	// Origin names the layer the value came from. Empty when nothing was
-	// supplied.
+	// Origin names the layer the value came from.
 	Origin Origin
 	// Err is the underlying cause.
 	Err error
@@ -40,17 +35,15 @@ type FieldError struct {
 
 func (fe *FieldError) Error() string {
 	var b strings.Builder
-	// Environment problems lead with the variable name, which is what the
-	// reader has to go and change. Problems in the struct definition itself
-	// have no variable to name, so they lead with the Go field path.
+	// Environment problems lead with the variable name; struct-definition
+	// problems have no variable, so they lead with the field path.
 	if fe.Key != "" {
 		b.WriteString(fe.Key)
 	} else {
 		b.WriteString(fe.Field)
 	}
 	b.WriteString(": ")
-	// FieldError is exported, so it can reach here without a cause.
-	if fe.Err != nil {
+	if fe.Err != nil { // exported, so it can arrive without a cause
 		b.WriteString(fe.Err.Error())
 	} else {
 		b.WriteString("invalid")
@@ -63,20 +56,15 @@ func (fe *FieldError) Error() string {
 
 func (fe *FieldError) Unwrap() error { return fe.Err }
 
-// Error aggregates every problem found in a single Load.
-//
-// Reporting one failure at a time turns configuring a service into a guessing
-// game, so a Load reports every field it can. Parsing and validation are
-// necessarily sequential for any single field — a PORT that is not a number
-// cannot also be range-checked — but a field that fails to parse never stops
-// the others from being reported.
+// Error aggregates every problem found in a single Load. One failure at a
+// time turns configuring a service into a guessing game, so a field that fails
+// never stops the rest from being reported.
 type Error struct {
 	// Type is the name of the config struct that was being loaded.
 	Type string
 	// Fields holds the per-field failures, in struct declaration order.
 	Fields []FieldError
-	// Err holds a failure from the struct's own Validate method, which runs
-	// only once every field has been populated.
+	// Err holds a failure from the struct's own Validate method.
 	Err error
 }
 
@@ -103,8 +91,7 @@ func (e *Error) Error() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// Unwrap exposes every cause, so errors.Is and errors.As match against any of
-// them.
+// Unwrap exposes every cause, so errors.Is and errors.As match any of them.
 func (e *Error) Unwrap() []error {
 	out := make([]error, 0, len(e.Fields)+1)
 	for i := range e.Fields {

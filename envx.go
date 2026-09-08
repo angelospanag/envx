@@ -1,11 +1,6 @@
 // Package envx loads 12-factor configuration from layered sources into a
 // typed struct, reporting every problem at once with the environment variable
-// name attached.
-//
-// It is an environment loader, not a config framework: no YAML, no CLI flags,
-// no live reload. It has no dependencies.
-//
-// The common case is one call:
+// name attached. No dependencies.
 //
 //	type Config struct {
 //		Port     int                 `env:"PORT,default=8080"`
@@ -16,30 +11,24 @@
 //
 //	cfg, err := envx.Load[Config]()
 //
-// When several structs share one set of sources, build a Loader and reuse the
-// snapshot:
+// To populate several structs from one set of sources, build a [Loader] and
+// reuse the snapshot:
 //
-//	l, err := envx.New(
-//		envx.OSEnv(),
-//		envx.DotEnv(".env.local", ".env"),
-//		envx.SecretsDir("/run/secrets"),
-//	)
+//	l, err := envx.New(envx.OSEnv(), envx.DotEnv(".env"))
 //	api, err := l.Load[APIConfig]()
 //	db, err := l.Load[DatabaseConfig]()
 //
 // # Precedence
 //
-// Earlier sources win. The default for [Load] is the process environment
-// first, then .env — so a value baked into a checked-in .env file can never
-// silently override what the deployment actually set.
+// Earlier sources win. [Load] reads the process environment before .env, so a
+// checked-in file cannot override what the deployment set.
 //
 // # Set but empty
 //
-// PORT= supplies the empty string; it does not leave PORT unset. A default
-// therefore does not apply to it, and it will fail to parse as an int just as
-// "abc" would. This is the only choice that stays recoverable: a field that
-// genuinely wants an empty string has no other way to say so, whereas a field
-// that wants empty-means-absent can say that with notEmpty and a default.
+// PORT= supplies the empty string rather than leaving PORT unset, so a default
+// does not apply and it fails to parse as an int just as "abc" would. It is the
+// only recoverable choice: a field wanting a genuine empty string has no other
+// way to say so, while empty-means-absent is expressible with notEmpty.
 package envx
 
 // Option configures the package-level [Load].
@@ -55,13 +44,13 @@ func WithSources(sources ...Source) Option {
 }
 
 // DefaultSources returns the layers [Load] uses when none are given: the
-// process environment, then a .env file in the working directory.
+// process environment, then .env in the working directory.
 func DefaultSources() []Source {
 	return []Source{OSEnv(), DotEnv(".env")}
 }
 
-// Load reads the default sources and populates a T. It is shorthand for
-// [New] followed by [Loader.Load].
+// Load populates a T from [DefaultSources]. Shorthand for [New] then
+// [Loader.Load].
 func Load[T any](opts ...Option) (T, error) {
 	o := loadOptions{sources: DefaultSources()}
 	for _, fn := range opts {

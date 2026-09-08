@@ -5,8 +5,7 @@ import (
 	"strings"
 )
 
-// parseDotEnv parses .env file contents into a map. It never touches
-// os.Environ.
+// parseDotEnv parses .env contents into a map, never touching os.Environ.
 //
 // Supported syntax:
 //
@@ -17,9 +16,8 @@ import (
 //	KEY=                 present, empty string (see the set-but-empty rule)
 //
 // Unquoted and double-quoted values expand ${VAR}, $VAR and ${VAR:-default}
-// against keys defined earlier in the same file. Expansion never reaches into
-// other layers or the process environment, which keeps each file readable on
-// its own. Write \$ or use single quotes to disable it.
+// against earlier keys in the same file only — never other layers or the
+// process environment. Write \$ or single-quote to disable.
 func parseDotEnv(data string) (map[string]string, error) {
 	out := map[string]string{}
 	lines := strings.Split(strings.ReplaceAll(data, "\r\n", "\n"), "\n")
@@ -41,8 +39,7 @@ func parseDotEnv(data string) (map[string]string, error) {
 		if err := checkKey(key); err != nil {
 			return nil, fmt.Errorf("line %d: %w", i+1, err)
 		}
-		// stripComment needs the leading whitespace, so keep both forms.
-		trimmed := strings.TrimLeft(rest, " \t")
+		trimmed := strings.TrimLeft(rest, " \t") // stripComment needs `rest`
 
 		var val string
 		switch {
@@ -60,9 +57,8 @@ func parseDotEnv(data string) (map[string]string, error) {
 			}
 		default:
 			val = expandVars(strings.TrimSpace(stripComment(rest)), out)
-			// Unquoted values get no escape processing beyond \$, which has to
-			// work here or there would be no way to write a literal $ outside
-			// single quotes.
+			// The only escape unquoted values honour, or a literal $ would be
+			// impossible outside single quotes.
 			val = strings.ReplaceAll(val, `\$`, "$")
 		}
 		out[key] = val
@@ -70,9 +66,8 @@ func parseDotEnv(data string) (map[string]string, error) {
 	return out, nil
 }
 
-// readQuoted consumes a quoted value, which may span several lines. It returns
-// the body with escape sequences still intact and the index of the last line
-// consumed.
+// readQuoted consumes a possibly multi-line quoted value, returning the body
+// with escapes intact and the index of the last line consumed.
 func readQuoted(lines []string, idx int, first string, quote byte) (string, int, error) {
 	var b strings.Builder
 	cur := first
@@ -81,8 +76,7 @@ func readQuoted(lines []string, idx int, first string, quote byte) (string, int,
 		for j := range len(cur) {
 			c := cur[j]
 			switch {
-			case escaped:
-				// Keep the pair intact; unescapeDouble resolves it later.
+			case escaped: // keep the pair intact for unescapeDouble
 				b.WriteByte('\\')
 				b.WriteByte(c)
 				escaped = false
@@ -136,9 +130,8 @@ func unescapeDouble(s string) string {
 	return b.String()
 }
 
-// expandVars resolves ${VAR}, ${VAR:-default} and $VAR against vals. A
-// reference with no match and no default resolves to the empty string. A "$"
-// preceded by a backslash is left alone for unescapeDouble to handle.
+// expandVars resolves ${VAR}, ${VAR:-default} and $VAR against vals. An
+// unmatched reference with no default becomes the empty string.
 func expandVars(s string, vals map[string]string) string {
 	if !strings.Contains(s, "$") {
 		return s
@@ -165,9 +158,8 @@ func expandVars(s string, vals map[string]string) string {
 	return b.String()
 }
 
-// escapedAt reports whether the byte at i is escaped, which requires an odd
-// number of backslashes before it. An even number is a run of escaped
-// backslashes, so "C:\\${VAR}" expands while "C:\${VAR}" does not.
+// escapedAt reports whether the byte at i is escaped: an odd number of
+// preceding backslashes. So "C:\\${VAR}" expands while "C:\${VAR}" does not.
 func escapedAt(s string, i int) bool {
 	n := 0
 	for j := i - 1; j >= 0 && s[j] == '\\'; j-- {
@@ -176,8 +168,8 @@ func escapedAt(s string, i int) bool {
 	return n%2 == 1
 }
 
-// readVarRef parses a variable reference immediately after a "$". It returns
-// the name, any ":-" default, and how many bytes of s the reference occupied.
+// readVarRef parses a reference just after a "$", returning the name, any ":-"
+// default, and the bytes consumed.
 func readVarRef(s string) (name, def string, hasDef bool, width int, ok bool) {
 	if strings.HasPrefix(s, "{") {
 		end := strings.IndexByte(s, '}')
@@ -206,10 +198,9 @@ func readVarRef(s string) (name, def string, hasDef bool, width int, ok bool) {
 }
 
 // stripComment removes a trailing comment from an unquoted value. A "#" only
-// starts a comment when whitespace precedes it, so that a URL fragment or a
-// hex colour survives intact. Callers pass the value with its leading
-// whitespace still attached, so that "KEY= # note" is an empty value with a
-// comment while "KEY=#0af" is a colour.
+// starts one when whitespace precedes it, so a URL fragment or hex colour
+// survives. Callers keep the leading whitespace, so "KEY= # note" is empty
+// while "KEY=#0af" is a colour.
 func stripComment(s string) string {
 	for i := 1; i < len(s); i++ {
 		if s[i] == '#' && (s[i-1] == ' ' || s[i-1] == '\t') {

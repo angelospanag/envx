@@ -9,16 +9,13 @@ import (
 	"strings"
 )
 
-// Origin names the layer that supplied a value, for provenance reporting.
-// It is a human-readable label such as ".env.local", "OS environment", or
-// "/run/secrets/db_password".
+// Origin labels the layer that supplied a value, such as ".env.local" or
+// "OS environment".
 type Origin string
 
-// Source yields one layer of raw values.
-//
-// Sources never touch os.Environ. A .env file is read into a map and stays
-// there; that is what makes layering, provenance and unknown-key detection
-// possible at all.
+// Source yields one layer of raw values. Sources never touch os.Environ: a
+// .env file is read into a map and stays there, which is what makes layering
+// and provenance possible.
 type Source interface {
 	// Name labels the source in provenance and error output.
 	Name() string
@@ -26,9 +23,8 @@ type Source interface {
 	Values() (map[string]string, error)
 }
 
-// multiSource is implemented by sources that expand into several named
-// sources, so that DotEnv(".env.local", ".env") can attribute each key to the
-// specific file it came from rather than to a generic "dotenv" label.
+// multiSource is implemented by sources expanding into several named layers,
+// so DotEnv(".env.local", ".env") attributes each key to its own file.
 type multiSource interface {
 	expand() []Source
 }
@@ -84,12 +80,9 @@ func (s valuesSource) Values() (map[string]string, error) {
 
 type dotEnvSource struct{ path string }
 
-// DotEnv reads one or more .env files. Files are parsed into a map and are
-// never loaded into the process environment.
-//
-// Each path becomes its own layer, so earlier paths win over later ones and
-// provenance names the exact file. A missing file is not an error; an
-// unreadable or malformed one is.
+// DotEnv reads one or more .env files into a map, never into the process
+// environment. Each path is its own layer, so earlier paths win and provenance
+// names the exact file. A missing file is fine; a malformed one is an error.
 func DotEnv(paths ...string) Source {
 	srcs := make([]Source, len(paths))
 	for i, p := range paths {
@@ -148,11 +141,10 @@ func (l sourceList) Values() (map[string]string, error) {
 
 type secretsDirSource struct{ dir string }
 
-// SecretsDir reads a directory of file-mounted secrets, as produced by Docker
-// secrets and Kubernetes volume mounts. Each file's name is the key and its
-// contents are the value, with one trailing newline removed.
-//
-// Subdirectories and dotfiles are skipped. A missing directory is not an error.
+// SecretsDir reads file-mounted secrets, as produced by Docker and Kubernetes
+// volume mounts: each filename is a key, its contents the value, with one
+// trailing newline removed. Dotfiles and non-regular files are skipped, and a
+// missing directory is not an error.
 func SecretsDir(dir string) Source { return secretsDirSource{dir: dir} }
 
 func (s secretsDirSource) Name() string { return s.dir }
@@ -167,10 +159,18 @@ func (s secretsDirSource) Values() (map[string]string, error) {
 	}
 	out := map[string]string{}
 	for _, e := range entries {
-		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+		if strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		p := filepath.Join(s.dir, e.Name())
+		// Stat rather than trust the entry: secrets are mounted as symlinks and
+		// DirEntry.IsDir reports the link's own type, so a link to a directory
+		// would be read as a file and fail the whole load. Broken links are
+		// skipped too; a required field reports an absent secret far better.
+		fi, err := os.Stat(p)
+		if err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
 		data, err := os.ReadFile(p)
 		if err != nil {
 			return nil, fmt.Errorf("envx: reading secret %s: %w", p, err)

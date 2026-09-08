@@ -7,14 +7,12 @@ import (
 	"strings"
 )
 
-// Validator is implemented by config structs that need cross-field rules —
-// the checks that no single field can express on its own, such as "if
-// DATABASE_URL is empty then DB_HOST and DB_NAME must both be set".
+// Validator is implemented by config structs needing cross-field rules, such
+// as "if DATABASE_URL is empty then DB_HOST and DB_NAME must both be set". It
+// runs once every field is populated, and only if none failed.
 //
-// It runs once, after every field has been populated, and only if no field
-// failed. This interface is deliberately non-generic: generic methods are
-// excluded from runtime method sets, so a generic Validate would be invisible
-// to the reflection this library is built on.
+// Non-generic on purpose: generic methods are excluded from runtime method
+// sets, so a generic Validate would be invisible to reflection.
 type Validator interface {
 	Validate() error
 }
@@ -25,11 +23,8 @@ type entry struct {
 	origin Origin
 }
 
-// Loader holds a resolved, merged snapshot of every source.
-//
-// Sources are read once, when the Loader is built. Earlier sources win over
-// later ones. One Loader can populate any number of different config structs
-// from that single snapshot.
+// Loader holds a merged snapshot of every source, read once at construction.
+// Earlier sources win, and one Loader can populate any number of structs.
 type Loader struct {
 	merged map[string]entry
 	layers []Origin
@@ -69,12 +64,9 @@ func (l *Loader) lookup(key string) (string, Origin, bool) {
 	return e.value, e.origin, ok
 }
 
-// hasPrefix reports whether any key in the snapshot starts with prefix. It
-// decides whether an optional pointer group was configured at all.
+// hasPrefix reports whether any key starts with prefix, deciding whether an
+// optional pointer group was configured. Never called with an empty prefix.
 func (l *Loader) hasPrefix(prefix string) bool {
-	if prefix == "" {
-		return len(l.merged) > 0
-	}
 	for k := range l.merged {
 		if strings.HasPrefix(k, prefix) {
 			return true
@@ -102,19 +94,13 @@ func (l *Loader) Keys() []string {
 	return out
 }
 
-// Load populates a T from the snapshot.
+// Load populates a T from the snapshot, reporting every field that fails
+// rather than only the first. The returned error is always an [Error].
 //
-// This is a generic method, which Go 1.27 made possible. Before it, a loader
-// had to be either a generic type — locking one set of resolved sources to one
-// config struct — or a package-level function reading inside-out. Now one
-// snapshot serves many structs:
+// A generic method, so one snapshot serves many structs:
 //
-//	l, err := envx.New(envx.OSEnv(), envx.DotEnv(".env"))
 //	api, err := l.Load[APIConfig]()
 //	db, err := l.Load[DatabaseConfig]()
-//
-// Every field that fails is reported, not just the first. The returned error
-// is always an *Error.
 func (l *Loader) Load[T any]() (T, error) {
 	var cfg T
 	rv := reflect.ValueOf(&cfg).Elem()
@@ -128,14 +114,17 @@ func (l *Loader) Load[T any]() (T, error) {
 
 	d := &decoder{l: l}
 	d.walk(rv, "", name)
+
+	// Return the zero value, never a half-filled struct: a port that failed to
+	// parse would otherwise read as 0 rather than as obviously unset.
+	var zero T
 	if len(d.errs) > 0 {
-		return cfg, &Error{Type: name, Fields: d.errs}
+		return zero, &Error{Type: name, Fields: d.errs}
 	}
 
-	// Checking the pointer covers both value and pointer receivers.
-	if v, ok := any(&cfg).(Validator); ok {
+	if v, ok := any(&cfg).(Validator); ok { // pointer covers both receivers
 		if err := v.Validate(); err != nil {
-			return cfg, &Error{Type: name, Err: err}
+			return zero, &Error{Type: name, Err: err}
 		}
 	}
 	return cfg, nil
