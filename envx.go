@@ -31,6 +31,8 @@
 // way to say so, while empty-means-absent is expressible with notEmpty.
 package envx
 
+import "slices"
+
 // Option configures the package-level [Load].
 type Option func(*loadOptions)
 
@@ -40,6 +42,9 @@ type loadOptions struct {
 
 // WithSources replaces the default sources.
 func WithSources(sources ...Source) Option {
+	// Clone: passing a slice with s... shares its backing array, so a later
+	// write by the caller would otherwise change what gets loaded.
+	sources = slices.Clone(sources)
 	return func(o *loadOptions) { o.sources = sources }
 }
 

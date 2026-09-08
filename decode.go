@@ -237,11 +237,32 @@ func (d *decoder) leaf(fv reflect.Value, key, path string, opts fieldOpts, secre
 	if err := setValue(fv, raw, opts.separator); err != nil {
 		shown := raw
 		if secret {
-			shown = Redacted
+			shown, err = Redacted, redactErr(err, raw)
 		}
 		d.fail(path, key, shown, origin, err)
 	}
 }
+
+// redactErr scrubs raw from an error message. Converters build their own
+// messages and quote the offending value, and they have no idea the field is a
+// secret — so scrub here rather than trust every present and future producer.
+func redactErr(err error, raw string) error {
+	msg := err.Error()
+	if raw == "" || !strings.Contains(msg, raw) {
+		return err
+	}
+	return &redactedError{msg: strings.ReplaceAll(msg, raw, Redacted), cause: err}
+}
+
+// redactedError prints a scrubbed message while keeping the original cause
+// reachable, so errors.Is and errors.As still match.
+type redactedError struct {
+	msg   string
+	cause error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.cause }
 
 func (d *decoder) fail(path, key, value string, origin Origin, err error) {
 	d.errs = append(d.errs, FieldError{
@@ -265,8 +286,11 @@ func isNested(t reflect.Type) bool {
 	return !reflect.PointerTo(t).Implements(textUnmarshalerType)
 }
 
+// isSecretType reports whether a field holds secrets, looking through
+// pointers, slices and arrays: a []Secret would otherwise have its whole raw
+// list printed on failure.
 func isSecretType(t reflect.Type) bool {
-	if t.Kind() == reflect.Pointer {
+	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
 		t = t.Elem()
 	}
 	return t.Implements(secretMarkerType)
