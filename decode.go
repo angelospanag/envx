@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -164,11 +165,25 @@ func (d *decoder) leaf(fv reflect.Value, key, path string, opts fieldOpts, secre
 // messages and quote the offending value, and they have no idea the field is a
 // secret — so scrub here rather than trust every present and future producer.
 func redactErr(err error, raw string) error {
-	msg := err.Error()
-	if raw == "" || !strings.Contains(msg, raw) {
+	if raw == "" {
 		return err
 	}
-	return &redactedError{msg: strings.ReplaceAll(msg, raw, Redacted), cause: err}
+	original := err.Error()
+
+	// Converters quote the offending value with %q, so replace that form: it
+	// is unambiguous, where a bare replacement of a short secret such as "a"
+	// would rewrite the surrounding message into nonsense.
+	msg := strings.ReplaceAll(original, strconv.Quote(raw), strconv.Quote(Redacted))
+
+	// Still present in some other form — or the secret is itself a word of the
+	// message. Drop the detail rather than leak it or mangle the text.
+	if strings.Contains(msg, raw) {
+		return &redactedError{msg: "invalid value " + Redacted, cause: err}
+	}
+	if msg == original {
+		return err
+	}
+	return &redactedError{msg: msg, cause: err}
 }
 
 // redactedError prints a scrubbed message while keeping the original cause

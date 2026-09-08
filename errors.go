@@ -72,7 +72,10 @@ func (e *Error) Error() string {
 	var b strings.Builder
 	b.WriteString("envx: ")
 	switch n := len(e.Fields); {
-	case n == 0 && e.Err != nil:
+	case n == 0 && e.Err == nil:
+		fmt.Fprintf(&b, "%s failed to load", e.Type)
+		return b.String()
+	case n == 0:
 		fmt.Fprintf(&b, "%s failed validation: %s", e.Type, e.Err)
 		return b.String()
 	case n == 1:
