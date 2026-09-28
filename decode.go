@@ -1,0 +1,299 @@
+package envx
+
+import (
+	"encoding"
+	"fmt"
+	"reflect"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+)
+
+var (
+	textUnmarshalerType = reflect.TypeFor[encoding.TextUnmarshaler]()
+	secretMarkerType    = reflect.TypeFor[secretMarker]()
+	durationType        = reflect.TypeFor[time.Duration]()
+)
+
+// OriginDefault marks a value that came from a tag default, not a source.
+const OriginDefault Origin = "default"
+
+type decoder struct {
+	l    *Loader
+	errs []FieldError
+	// stack holds the struct types currently being walked, catching a
+	// self-referential type instead of recursing forever.
+	stack []reflect.Type
+}
+
+// walk populates rv, appending a FieldError per unfillable field rather than
+// stopping at the first.
+func (d *decoder) walk(rv reflect.Value, prefix, path string) {
+	rt := rv.Type()
+	d.stack = append(d.stack, rt)
+	defer func() { d.stack = d.stack[:len(d.stack)-1] }()
+
+	for i := range rt.NumField() {
+		sf := rt.Field(i)
+		if !sf.IsExported() && !promotesSettableFields(sf) {
+			continue
+		}
+		tag, hasTag := sf.Tag.Lookup("env")
+		if tag == "-" {
+			continue
+		}
+		fv := rv.Field(i)
+		fieldPath := path + "." + sf.Name
+
+		if isNested(sf.Type) {
+			nested := fieldPath
+			if sf.Anonymous {
+				nested = path // promoted fields add no path segment
+			}
+			groupPrefix := prefix + sf.Tag.Get("envPrefix")
+
+			// A nested struct is addressed by prefixing its fields, so an env
+			// name means nothing here. The author meant envPrefix, and would
+			// otherwise silently get zero values.
+			n, opts, _ := strings.Cut(tag, ",")
+			if strings.TrimSpace(n) != "" {
+				d.fail(fieldPath, "", "", "", fmt.Errorf(
+					"%w: %s is a nested struct, so it takes envPrefix:%q, not env:%q",
+					ErrInvalidTag, sf.Name, strings.TrimSpace(n)+"_", strings.TrimSpace(n),
+				))
+				continue
+			}
+			// Likewise required, default and the rest apply to one value, and
+			// would otherwise be dropped without a word.
+			if strings.TrimSpace(opts) != "" {
+				d.fail(fieldPath, "", "", "", fmt.Errorf(
+					"%w: %s is a nested struct, so env options %q do not apply to it",
+					ErrInvalidTag, sf.Name, strings.TrimSpace(opts),
+				))
+				continue
+			}
+			d.walkNested(fv, groupPrefix, nested, fieldPath)
+			continue
+		}
+
+		opts, err := parseFieldTag(tag)
+		if !hasTag || opts.name == "" {
+			opts.name = screamingSnake(sf.Name)
+		}
+		if err != nil {
+			d.fail(fieldPath, prefix+opts.name, "", "", err)
+			continue
+		}
+
+		// envPrefix only means something on a nested struct. Left on a leaf it
+		// would silently read the unprefixed variable instead.
+		if p, ok := sf.Tag.Lookup("envPrefix"); ok {
+			d.fail(fieldPath, "", "", "", fmt.Errorf(
+				"%w: envPrefix:%q on a non-struct field; did you mean env:%q?",
+				ErrInvalidTag, p, p+opts.name,
+			))
+			continue
+		}
+		d.leaf(fv, prefix+opts.name, fieldPath, opts, isSecretType(sf.Type))
+	}
+}
+
+// promotesSettableFields reports whether an unexported field is still worth
+// walking. reflect permits setting fields promoted from an embedded unexported
+// struct even though the field itself reports CanSet false; an embedded
+// unexported pointer or scalar panics instead, so only the struct qualifies.
+func promotesSettableFields(sf reflect.StructField) bool {
+	return sf.Anonymous && sf.Type.Kind() == reflect.Struct && isNested(sf.Type)
+}
+
+func (d *decoder) walkNested(fv reflect.Value, prefix, path, fieldPath string) {
+	ptr := fv.Kind() == reflect.Pointer
+	if ptr && fv.IsNil() {
+		// A pointer group is optional, populated only when a source supplied
+		// one of its keys; a value struct is always populated. Deciding this
+		// before the cycle check lets an unconfigured recursive type stop
+		// quietly. Without a prefix the group shares its parent's namespace, so
+		// it is always populated rather than hinging on unrelated keys.
+		if !fv.CanSet() || (prefix != "" && !d.configured(fv.Type(), prefix, nil)) {
+			return
+		}
+	}
+
+	// A self-containing type cannot be expressed as flat variables, and walking
+	// it would not terminate.
+	if st := derefType(fv.Type()); slices.Contains(d.stack, st) {
+		d.fail(fieldPath, "", "", "", fmt.Errorf(
+			"%w: %s is recursive", ErrUnsupportedType, st,
+		))
+		return
+	}
+
+	if ptr {
+		if fv.IsNil() {
+			fv.Set(reflect.New(fv.Type().Elem()))
+		}
+		fv = fv.Elem()
+	}
+	d.walk(fv, prefix, path)
+}
+
+// configured reports whether a source supplied any key that struct t would
+// read under prefix. Matching on the prefix alone would let a sibling group's
+// keys switch this one on: DB_REPLICA_HOST starts with DB_.
+func (d *decoder) configured(t reflect.Type, prefix string, seen []reflect.Type) bool {
+	t = derefType(t)
+	if slices.Contains(seen, t) {
+		return false
+	}
+	seen = append(seen, t)
+
+	for i := range t.NumField() {
+		sf := t.Field(i)
+		if !sf.IsExported() && !promotesSettableFields(sf) {
+			continue
+		}
+		tag := sf.Tag.Get("env")
+		if tag == "-" {
+			continue
+		}
+		if isNested(sf.Type) {
+			if d.configured(sf.Type, prefix+sf.Tag.Get("envPrefix"), seen) {
+				return true
+			}
+			continue
+		}
+		opts, _ := parseFieldTag(tag)
+		if opts.name == "" {
+			opts.name = screamingSnake(sf.Name)
+		}
+		if _, _, found := d.l.lookup(prefix + opts.name); found {
+			return true
+		}
+	}
+	return false
+}
+
+func derefType(t reflect.Type) reflect.Type {
+	if t.Kind() == reflect.Pointer {
+		return t.Elem()
+	}
+	return t
+}
+
+func (d *decoder) leaf(fv reflect.Value, key, path string, opts fieldOpts, secret bool) {
+	raw, origin, found := d.l.lookup(key)
+	if !found {
+		switch {
+		case opts.hasDefault:
+			raw, origin = opts.def, OriginDefault
+		case opts.required:
+			d.fail(path, key, "", "", ErrMissing)
+			return
+		default:
+			return // leave the zero value in place
+		}
+	}
+	if raw == "" && opts.notEmpty {
+		d.fail(path, key, "", origin, ErrEmpty)
+		return
+	}
+	if err := setValue(fv, raw, opts.separator); err != nil {
+		shown := raw
+		if secret {
+			shown, err = Redacted, redactErr(err, secretForms(raw, opts.separator)...)
+		}
+		d.fail(path, key, shown, origin, err)
+	}
+}
+
+// secretForms lists every form in which a converter may quote a secret: the
+// raw value, the value trimmed, and each item of a list, which setSlice trims
+// and converts on its own.
+func secretForms(raw, sep string) []string {
+	forms := []string{raw, strings.TrimSpace(raw)}
+	if sep != "" {
+		for p := range strings.SplitSeq(raw, sep) {
+			forms = append(forms, strings.TrimSpace(p))
+		}
+	}
+	return forms
+}
+
+// redactErr scrubs every form of a secret from an error message. Converters
+// build their own messages and quote the offending value, and they have no
+// idea the field is a secret — so scrub here rather than trust every present
+// and future producer.
+func redactErr(err error, forms ...string) error {
+	forms = slices.DeleteFunc(slices.Clone(forms), func(f string) bool { return f == "" })
+	if len(forms) == 0 {
+		return err
+	}
+	// Longest first, so a list item does not break up the whole value's
+	// quoted form before it is replaced.
+	slices.SortFunc(forms, func(a, b string) int { return len(b) - len(a) })
+	original := err.Error()
+
+	// Converters quote the offending value with %q, so replace that form: it
+	// is unambiguous, where a bare replacement of a short secret such as "a"
+	// would rewrite the surrounding message into nonsense.
+	msg := original
+	for _, f := range forms {
+		msg = strings.ReplaceAll(msg, strconv.Quote(f), strconv.Quote(Redacted))
+	}
+
+	// Still present in some other form — or the secret is itself a word of the
+	// message. Drop the detail rather than leak it or mangle the text.
+	for _, f := range forms {
+		if strings.Contains(msg, f) {
+			return &redactedError{msg: "invalid value " + Redacted, cause: err}
+		}
+	}
+	if msg == original {
+		return err
+	}
+	return &redactedError{msg: msg, cause: err}
+}
+
+// redactedError prints a scrubbed message while keeping the original cause
+// reachable, so errors.Is and errors.As still match.
+type redactedError struct {
+	msg   string
+	cause error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+
+func (e *redactedError) Unwrap() error { return e.cause }
+
+func (d *decoder) fail(path, key, value string, origin Origin, err error) {
+	d.errs = append(d.errs, FieldError{
+		Field:  path,
+		Key:    key,
+		Value:  value,
+		Origin: origin,
+		Err:    err,
+	})
+}
+
+// isNested reports whether a field is recursed into rather than parsed from a
+// string. A struct that parses itself — time.Time, Secret — is a leaf.
+func isNested(t reflect.Type) bool {
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return false
+	}
+	return !reflect.PointerTo(t).Implements(textUnmarshalerType)
+}
+
+// isSecretType reports whether a field holds secrets, looking through
+// pointers, slices and arrays: a []Secret would otherwise have its whole raw
+// list printed on failure.
+func isSecretType(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
+		t = t.Elem()
+	}
+	return t.Implements(secretMarkerType)
+}
