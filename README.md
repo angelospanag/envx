@@ -9,7 +9,7 @@ errors that name the variable to fix.
 go get github.com/angelospanag/envx
 ```
 
-Requires Go 1.27+ (for generic methods).
+Requires Go 1.27.3+ (for generic methods).
 
 ## Usage
 
@@ -90,6 +90,19 @@ Implement `Validate() error` for cross-field rules; it runs after all fields
 parse. Failures are an `*envx.Error` whose `Fields` list each problem and which
 works with `errors.Is` against `ErrMissing`, `ErrEmpty`, `ErrUnsupportedType`
 and `ErrInvalidTag`.
+
+## Development
+
+[mise](https://mise.jdx.dev/) manages the pinned toolchain (Go 1.27.3, golangci-lint).
+
+```bash
+mise install
+mise run check   # format, lint, test and audit; run before pushing
+mise run test
+mise run fuzz
+```
+
+Run `mise tasks` for the full list.
 
 ## License
 
