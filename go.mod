@@ -1,6 +1,6 @@
 module github.com/angelospanag/envx
 
-go 1.27.3
+go 1.27.0
 
 require github.com/joho/godotenv v1.5.1
 

@@ -9,7 +9,7 @@ errors that name the variable to fix.
 go get github.com/angelospanag/envx
 ```
 
-Requires Go 1.27.3+ (for generic methods).
+Requires Go 1.27+ (for generic methods).
 
 ## Usage
 
