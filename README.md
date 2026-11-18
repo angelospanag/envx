@@ -93,7 +93,7 @@ and `ErrInvalidTag`.
 
 ## Development
 
-[mise](https://mise.jdx.dev/) manages the pinned toolchain (Go 1.27.3, golangci-lint).
+[mise](https://mise.jdx.dev/) manages the pinned toolchain (Go 1.27.4, golangci-lint).
 
 ```bash
 mise install
